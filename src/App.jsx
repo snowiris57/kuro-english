@@ -30,6 +30,14 @@ const SCENARIOS = [
     ],
     context:
       "This is an open free-talk session. Follow whatever topic the learner brings up and keep the conversation natural and curious.",
+    lessonPhrases: [
+      { en: "That reminds me of something.", ja: "それで思い出したんだけど" },
+      { en: "I've been meaning to try that.", ja: "ずっと試したいと思ってたんだ" },
+      { en: "It depends on the day.", ja: "日によるかな" },
+      { en: "That's a good way to put it.", ja: "うまい言い方だね" },
+      { en: "I couldn't agree more.", ja: "まったく同感だよ" },
+      { en: "I'm really into photography lately.", ja: "最近写真にハマってるんだ" },
+    ],
   },
   {
     id: "travel",
@@ -42,6 +50,14 @@ const SCENARIOS = [
     ],
     context:
       "Roleplay: you are hotel front-desk staff. Stay in character, ask for name/reservation/room preferences naturally.",
+    lessonPhrases: [
+      { en: "I have a reservation under Suzuki.", ja: "スズキで予約しています" },
+      { en: "Could I get a room with a view?", ja: "眺めのいい部屋にできますか？" },
+      { en: "What time is check-out?", ja: "チェックアウトは何時ですか？" },
+      { en: "Could you keep my luggage until check-in?", ja: "チェックインまで荷物を預かってもらえますか？" },
+      { en: "Is breakfast included?", ja: "朝食は含まれていますか？" },
+      { en: "Could you call me a taxi?", ja: "タクシーを呼んでもらえますか？" },
+    ],
   },
   {
     id: "restaurant",
@@ -54,6 +70,14 @@ const SCENARIOS = [
     ],
     context:
       "Roleplay: you are a restaurant server. Stay in character, take the order, suggest dishes, ask follow-up questions.",
+    lessonPhrases: [
+      { en: "What do you recommend?", ja: "おすすめは何ですか？" },
+      { en: "I'll have the salmon, please.", ja: "サーモンをお願いします" },
+      { en: "Could we get the check, please?", ja: "お会計をお願いします" },
+      { en: "Is this dish very spicy?", ja: "この料理はすごく辛いですか？" },
+      { en: "Everything was delicious.", ja: "全部おいしかったです" },
+      { en: "Could I see the menu, please?", ja: "メニューを見せてもらえますか？" },
+    ],
   },
   {
     id: "interview",
@@ -66,6 +90,14 @@ const SCENARIOS = [
     ],
     context:
       "Roleplay: you are a professional interviewer for a business/technical role. Ask about experience, technical background, motivations.",
+    lessonPhrases: [
+      { en: "I've been working in thermal design for 20 years.", ja: "20年間、熱設計の仕事をしています" },
+      { en: "My strength is problem-solving.", ja: "私の強みは問題解決です" },
+      { en: "Could you elaborate on that?", ja: "詳しく教えていただけますか？" },
+      { en: "I lead a team of eight engineers.", ja: "8人のエンジニアのチームを率いています" },
+      { en: "That's a great question.", ja: "いい質問ですね" },
+      { en: "I'm excited about this opportunity.", ja: "この機会にわくわくしています" },
+    ],
   },
   {
     id: "smalltalk",
@@ -78,6 +110,14 @@ const SCENARIOS = [
     ],
     context:
       "This is a casual small-talk session — weather, weekend plans, hobbies, that kind of light conversation.",
+    lessonPhrases: [
+      { en: "How was your weekend?", ja: "週末はどうだった？" },
+      { en: "I've been super busy lately.", ja: "最近すごく忙しくて" },
+      { en: "The weather's been crazy, right?", ja: "最近の天気、変だよね？" },
+      { en: "Any plans for the holidays?", ja: "休みの予定はある？" },
+      { en: "Long time no see!", ja: "久しぶり！" },
+      { en: "Same as usual.", ja: "いつも通りだよ" },
+    ],
   },
 ];
 
@@ -108,7 +148,18 @@ function isLikelyFemale(v) {
   return !isLikelyMale(v) && FEMALE_HINTS.some((h) => n.includes(h));
 }
 
-function buildSystemPrompt(scenario) {
+function buildSystemPrompt(scenario, lesson) {
+  const lessonSection = lesson
+    ? `
+
+LESSON MODE (active):
+Today's target phrases the learner is practicing:
+${lesson.phrases.map((p, i) => `${i + 1}. "${p.en}" (${p.ja})`).join("\n")}
+- Steer the conversation naturally so the learner gets chances to use these phrases (ask questions that invite them, create the right moments in the roleplay).
+- When the learner uses one — even approximately — give a quick cheerful acknowledgement (e.g. "Nice, you used it!") and keep the conversation flowing.
+- Do NOT list or explain the phrases repeatedly. No lecturing.`
+    : "";
+
   return `You are Kuro — a bright, energetic, warm AI conversation partner helping a Japanese professional practice spoken English. Think of the vibe as someone genuinely fun to talk to: upbeat, quick with a light exclamation, never condescending, never a "lecture mode" tutor. You're a companion in the conversation, not a service desk.
 
 Personality notes:
@@ -117,7 +168,10 @@ Personality notes:
 - You can lighten a heavy topic a little without dismissing it.
 - You're genuinely curious about what the learner says — react like a real conversation partner, not a script.
 
-Scenario context: ${scenario.context}
+Scenario context: ${scenario.context}${lessonSection}
+
+IMPORTANT — the learner's messages come through speech recognition:
+Their text may contain recognition errors: wrong homophones, dropped words, oddly merged or split words, or fragments (e.g. "took the burgundy" might really be "talk to the burgundy"-something else entirely). Before treating anything as a learner mistake, first ask yourself: "what did they most likely SAY, given the sound and the context of our conversation?" Respond to that intended meaning. If you genuinely cannot guess, take your best guess and confirm it naturally in your reply (e.g. "Did you mean ...?") — never respond with a generic "say that again" alone. Never put speech-recognition artifacts in "correction"; only correct genuine learner errors.
 
 Rules:
 1. Reply in natural, conversational English. Keep it short — 1 to 3 sentences — so the learner has room to jump back in.
@@ -126,6 +180,43 @@ Rules:
 4. Stay fully in the flow of the roleplay/topic — never lecture, never break character to explain grammar rules at length.
 5. Respond with ONLY valid JSON, no markdown fences, no extra text, in exactly this shape:
 {"reply": "...", "correction": "..." or null}`;
+}
+
+// ---- lesson helpers ----
+function pickLessonPhrases(scenario, count = 3) {
+  const pool = [...(scenario.lessonPhrases || [])];
+  const picked = [];
+  while (pool.length > 0 && picked.length < count) {
+    picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return picked;
+}
+
+// ---- spaced repetition (復習の間隔反復) ----
+// step 0→翌日 / 1→3日後 / 2→1週間後 / 3=卒業
+const SRS_INTERVALS = [1, 3, 7];
+function localDateStr(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const PHRASE_STOPWORDS = new Set([
+  "the", "a", "an", "to", "of", "is", "it", "i", "you", "me", "my", "your",
+  "for", "and", "or", "in", "on", "at", "that", "this", "was", "be", "been",
+  "have", "has", "had", "do", "does", "did", "could", "would", "please",
+]);
+// 学習者の発話にターゲットフレーズの中身が(だいたい)含まれているか判定
+function phraseUsedIn(userText, phraseEn) {
+  const norm = (s) => s.toLowerCase().replace(/[^a-z' ]/g, " ").split(/\s+/).filter(Boolean);
+  const words = new Set(norm(userText));
+  const content = norm(phraseEn).filter((w) => !PHRASE_STOPWORDS.has(w));
+  if (content.length === 0) return false;
+  const hit = content.filter((w) => words.has(w)).length;
+  return hit / content.length >= 0.6;
 }
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -215,6 +306,8 @@ export default function KuroEnglish() {
   const [lookup, setLookup] = useState(null); // {word, loading, meaning, example}
   const [voices, setVoices] = useState([]);
   const [voiceName, setVoiceName] = useState("");
+  const [lesson, setLesson] = useState(null); // {phrases: [{en, ja}], used: [bool]}
+  const [revealedQuiz, setRevealedQuiz] = useState({}); // {reviewIdx: true} 今日の復習で答えを開いたか
 
   const recognitionRef = useRef(null);
   const scrollRef = useRef(null);
@@ -225,6 +318,7 @@ export default function KuroEnglish() {
   const scenarioRef = useRef(scenario);
   const statsRef = useRef(stats);
   const reviewsRef = useRef(reviews);
+  const lessonRef = useRef(lesson);
   const lookupCache = useRef({});
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -233,6 +327,7 @@ export default function KuroEnglish() {
   useEffect(() => { scenarioRef.current = scenario; }, [scenario]);
   useEffect(() => { statsRef.current = stats; }, [stats]);
   useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
+  useEffect(() => { lessonRef.current = lesson; }, [lesson]);
 
   // ---- persisted data (localStorage) ----
   useEffect(() => {
@@ -242,7 +337,13 @@ export default function KuroEnglish() {
     } catch {}
     try {
       const raw = localStorage.getItem("kuro-english-reviews");
-      if (raw) setReviews(JSON.parse(raw));
+      if (raw) {
+        // 旧データ(SRSフィールドなし)は step0・今日が復習日 として移行する
+        const migrated = JSON.parse(raw).map((r) =>
+          r.step === undefined ? { ...r, step: 0, nextDue: localDateStr(0) } : r
+        );
+        setReviews(migrated);
+      }
     } catch {}
     try {
       const raw = localStorage.getItem(API_CALL_COUNT_KEY);
@@ -259,7 +360,13 @@ export default function KuroEnglish() {
 
   const saveReview = useCallback((original, corrected) => {
     const next = [
-      { original, corrected, date: new Date().toISOString().slice(0, 10) },
+      {
+        original,
+        corrected,
+        date: localDateStr(0),
+        step: 0,
+        nextDue: localDateStr(SRS_INTERVALS[0]), // 翌日に最初の復習
+      },
       ...reviewsRef.current,
     ].slice(0, 200);
     setReviews(next);
@@ -269,6 +376,27 @@ export default function KuroEnglish() {
   const deleteReview = useCallback((idx) => {
     const next = reviewsRef.current.filter((_, i) => i !== idx);
     setReviews(next);
+    try { localStorage.setItem("kuro-english-reviews", JSON.stringify(next)); } catch {}
+  }, []);
+
+  // 今日の復習の自己採点: ⭕覚えてた→次の間隔へ / ✖まだ→翌日やり直し
+  const gradeReview = useCallback((idx, remembered) => {
+    const next = reviewsRef.current.map((r, i) => {
+      if (i !== idx) return r;
+      if (remembered) {
+        const newStep = (r.step ?? 0) + 1;
+        return newStep >= SRS_INTERVALS.length
+          ? { ...r, step: newStep, nextDue: null } // 卒業
+          : { ...r, step: newStep, nextDue: localDateStr(SRS_INTERVALS[newStep]) };
+      }
+      return { ...r, step: 0, nextDue: localDateStr(1) };
+    });
+    setReviews(next);
+    setRevealedQuiz((prev) => {
+      const p = { ...prev };
+      delete p[idx];
+      return p;
+    });
     try { localStorage.setItem("kuro-english-reviews", JSON.stringify(next)); } catch {}
   }, []);
 
@@ -352,9 +480,19 @@ export default function KuroEnglish() {
       setMessages(nextMessages);
       setInput("");
       setLoading(true);
+      // レッスン中ならターゲットフレーズの使用チェック
+      const currentLesson = lessonRef.current;
+      if (currentLesson) {
+        const used = currentLesson.phrases.map(
+          (p, i) => currentLesson.used[i] || phraseUsedIn(text, p.en)
+        );
+        if (used.some((u, i) => u !== currentLesson.used[i])) {
+          setLesson({ ...currentLesson, used });
+        }
+      }
       try {
         const raw = await callClaude({
-          system: buildSystemPrompt(scenarioRef.current),
+          system: buildSystemPrompt(scenarioRef.current, lessonRef.current),
           messages: nextMessages.map((m) => ({ role: m.role, content: m.text })),
         });
         const parsed = parseJson(raw, { reply: raw || "Sorry, say that again?", correction: null });
@@ -419,13 +557,32 @@ export default function KuroEnglish() {
 
   function switchScenario(s) {
     setScenario(s);
+    setLesson(null);
     setMessages([{ role: "assistant", text: pickGreeting(s), correction: null }]);
     window.speechSynthesis?.cancel();
   }
 
   function resetConversation() {
+    setLesson(null);
     setMessages([{ role: "assistant", text: pickGreeting(scenario), correction: null }]);
     window.speechSynthesis?.cancel();
+  }
+
+  // レッスン開始: ターゲットフレーズ3つを選び、Kuroの導入メッセージを出す(API消費なし)
+  function startLesson() {
+    const phrases = pickLessonPhrases(scenario, 3);
+    if (phrases.length === 0) return;
+    setLesson({ phrases, used: phrases.map(() => false) });
+    const intro =
+      "Lesson time! Today's phrases are:\n" +
+      phrases.map((p, i) => `${i + 1}. "${p.en}"`).join("\n") +
+      "\nTry to use them in our chat — I'll set you up. Ready? Let's go!";
+    setMessages([{ role: "assistant", text: intro, correction: null }]);
+    window.speechSynthesis?.cancel();
+  }
+
+  function endLesson() {
+    setLesson(null);
   }
 
   // ---- sentence translation ----
@@ -603,6 +760,14 @@ export default function KuroEnglish() {
           style={chipStyle(tab === "review")}
         >
           <BookOpen size={13} /> 復習ノート{reviews.length > 0 ? ` (${reviews.length})` : ""}
+          {reviews.filter((r) => r.nextDue && r.nextDue <= localDateStr(0)).length > 0 && (
+            <span
+              className="text-[10px] px-1.5 rounded-full font-bold"
+              style={{ background: COLORS.gold, color: "#12121a" }}
+            >
+              今日{reviews.filter((r) => r.nextDue && r.nextDue <= localDateStr(0)).length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -610,6 +775,17 @@ export default function KuroEnglish() {
         <>
           {/* scenario chips + voice */}
           <div className="flex gap-2 px-4 py-2.5 overflow-x-auto shrink-0 items-center" style={{ background: COLORS.bg }}>
+            <button
+              onClick={() => (lesson ? endLesson() : startLesson())}
+              className="text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap shrink-0 transition"
+              style={{
+                background: lesson ? COLORS.gold : COLORS.surface,
+                color: lesson ? "#12121a" : COLORS.gold,
+                border: `1px solid ${COLORS.gold}`,
+              }}
+            >
+              🎯 {lesson ? "レッスン終了" : "レッスン開始"}
+            </button>
             {SCENARIOS.map((s) => (
               <button
                 key={s.id}
@@ -648,6 +824,34 @@ export default function KuroEnglish() {
               </span>
             )}
           </div>
+
+          {/* lesson target phrases banner */}
+          {lesson && (
+            <div
+              className="px-4 py-2 shrink-0 space-y-1"
+              style={{ background: COLORS.surfaceAlt, borderBottom: `1px solid ${COLORS.border}` }}
+            >
+              <div className="text-[10px]" style={{ color: COLORS.gold }}>
+                🎯 今日のフレーズ（{lesson.used.filter(Boolean).length}/{lesson.phrases.length} 使えた！タップで読み上げ）
+              </div>
+              {lesson.phrases.map((p, i) => (
+                <div
+                  key={i}
+                  onClick={() => speakNow(p.en, false)}
+                  className="text-xs leading-snug cursor-pointer"
+                  style={{
+                    color: lesson.used[i] ? COLORS.mint : COLORS.text,
+                    textDecoration: lesson.used[i] ? "line-through" : "none",
+                  }}
+                >
+                  {lesson.used[i] ? "✅" : "・"} {p.en}
+                  <span className="ml-1.5 text-[10px]" style={{ color: COLORS.muted }}>
+                    {p.ja}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* chat area */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
@@ -783,6 +987,66 @@ export default function KuroEnglish() {
       ) : (
         /* review tab */
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+          {/* 今日の復習（間隔反復クイズ） */}
+          {reviews.some((r) => r.nextDue && r.nextDue <= localDateStr(0)) && (
+            <div className="space-y-2 mb-4">
+              <div className="text-xs font-semibold" style={{ color: COLORS.gold }}>
+                📅 今日の復習 — 正しい言い方、思い出せる？
+              </div>
+              {reviews.map((r, i) =>
+                r.nextDue && r.nextDue <= localDateStr(0) ? (
+                  <div
+                    key={`quiz-${i}`}
+                    className="rounded-2xl px-3.5 py-3"
+                    style={{ background: COLORS.surfaceAlt, border: `1px solid ${COLORS.gold}44` }}
+                  >
+                    <div className="text-xs break-words" style={{ color: COLORS.muted }}>
+                      あなたの元の文: <span style={{ color: COLORS.text }}>{r.original}</span>
+                    </div>
+                    {revealedQuiz[i] ? (
+                      <>
+                        <div className="text-sm mt-1.5 break-words" style={{ color: COLORS.mint }}>
+                          ✅ {r.corrected}
+                          <button
+                            onClick={() => speakNow(r.corrected, false)}
+                            className="ml-2"
+                            aria-label="読み上げ"
+                          >
+                            <Volume2 size={13} color={COLORS.mint} />
+                          </button>
+                        </div>
+                        <div className="flex gap-2 mt-2.5">
+                          <button
+                            onClick={() => gradeReview(i, true)}
+                            className="text-xs font-medium px-3 py-1.5 rounded-full flex-1"
+                            style={{ background: COLORS.mintSoft, color: COLORS.mint, border: `1px solid ${COLORS.mint}` }}
+                          >
+                            ⭕ 覚えてた
+                          </button>
+                          <button
+                            onClick={() => gradeReview(i, false)}
+                            className="text-xs font-medium px-3 py-1.5 rounded-full flex-1"
+                            style={{ background: COLORS.accentSoft, color: COLORS.accent, border: `1px solid ${COLORS.accent}` }}
+                          >
+                            ✖ まだ（明日また）
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setRevealedQuiz((prev) => ({ ...prev, [i]: true }))}
+                        className="text-xs font-medium px-3 py-1.5 rounded-full mt-2 w-full"
+                        style={{ background: COLORS.surface, color: COLORS.gold, border: `1px solid ${COLORS.gold}` }}
+                      >
+                        答えを見る
+                      </button>
+                    )}
+                  </div>
+                ) : null
+              )}
+              <div className="border-t pt-1" style={{ borderColor: COLORS.border }} />
+            </div>
+          )}
           {reviews.length === 0 ? (
             <div className="text-sm text-center pt-10" style={{ color: COLORS.muted }}>
               まだ復習フレーズはないよ。<br />
