@@ -182,6 +182,17 @@ Rules:
 {"reply": "...", "correction": "..." or null}`;
 }
 
+// ---- translate mode prompt (日本語→英語 翻訳モード) ----
+function buildTranslatePrompt() {
+  return `You are a translation assistant for a Japanese professional practicing spoken English. The user's message is Japanese (it may contain speech-recognition errors — infer the intended meaning from context). Translate it into natural, conversational English they could actually say out loud.
+
+Rules:
+1. "reply" = the natural English translation. If genuinely useful, add ONE alternative phrasing on a new line starting with "or: ".
+2. If the input is already mostly English, lightly polish it instead.
+3. Spoken style, not stiff textbook English. Match the casualness of the original Japanese.
+4. Respond with ONLY valid JSON, no markdown fences, exactly: {"reply": "...", "correction": null}`;
+}
+
 // ---- lesson helpers ----
 function pickLessonPhrases(scenario, count = 3) {
   const pool = [...(scenario.lessonPhrases || [])];
@@ -309,6 +320,7 @@ export default function KuroEnglish() {
   const [voices, setVoices] = useState([]);
   const [voiceName, setVoiceName] = useState("");
   const [lesson, setLesson] = useState(null); // {phrases: [{en, ja}], used: [bool]}
+  const [translateMode, setTranslateMode] = useState(false); // 日本語→英語 翻訳モード
   const [revealedQuiz, setRevealedQuiz] = useState({}); // {reviewIdx: true} 今日の復習で答えを開いたか
 
   const recognitionRef = useRef(null);
@@ -321,6 +333,7 @@ export default function KuroEnglish() {
   const statsRef = useRef(stats);
   const reviewsRef = useRef(reviews);
   const lessonRef = useRef(lesson);
+  const translateModeRef = useRef(false);
   const lookupCache = useRef({});
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -330,6 +343,7 @@ export default function KuroEnglish() {
   useEffect(() => { statsRef.current = stats; }, [stats]);
   useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
   useEffect(() => { lessonRef.current = lesson; }, [lesson]);
+  useEffect(() => { translateModeRef.current = translateMode; }, [translateMode]);
 
   // ---- persisted data (localStorage) ----
   useEffect(() => {
@@ -452,6 +466,8 @@ export default function KuroEnglish() {
   const startMic = useCallback(() => {
     if (!recognitionRef.current || loadingRef.current) return;
     try {
+      // 翻訳モード中は日本語認識に切り替える
+      recognitionRef.current.lang = translateModeRef.current ? "ja-JP" : "en-US";
       recognitionRef.current.start();
       setListening(true);
     } catch {}
@@ -482,9 +498,9 @@ export default function KuroEnglish() {
       setMessages(nextMessages);
       setInput("");
       setLoading(true);
-      // レッスン中ならターゲットフレーズの使用チェック
+      // レッスン中ならターゲットフレーズの使用チェック（翻訳モード中は不要）
       const currentLesson = lessonRef.current;
-      if (currentLesson) {
+      if (currentLesson && !translateModeRef.current) {
         const used = currentLesson.phrases.map(
           (p, i) => currentLesson.used[i] || phraseUsedIn(text, p.en)
         );
@@ -494,7 +510,9 @@ export default function KuroEnglish() {
       }
       try {
         const raw = await callClaude({
-          system: buildSystemPrompt(scenarioRef.current, lessonRef.current),
+          system: translateModeRef.current
+            ? buildTranslatePrompt()
+            : buildSystemPrompt(scenarioRef.current, lessonRef.current),
           messages: nextMessages.map((m) => ({ role: m.role, content: m.text })),
         });
         const parsed = parseJson(raw, { reply: raw || "Sorry, say that again?", correction: null });
@@ -589,7 +607,27 @@ export default function KuroEnglish() {
   function switchScenario(s) {
     setScenario(s);
     setLesson(null);
+    setTranslateMode(false);
     setMessages([{ role: "assistant", text: pickGreeting(s), correction: null }]);
+    window.speechSynthesis?.cancel();
+  }
+
+  // 翻訳モード切替: ONで日本語→英語翻訳、マイクも日本語認識になる
+  function toggleTranslateMode() {
+    const next = !translateMode;
+    setTranslateMode(next);
+    setLesson(null);
+    if (next) {
+      setMessages([
+        {
+          role: "assistant",
+          text: "翻訳モード！日本語で話しかけてね、自然な英語にして返すよ。マイクも日本語認識に切り替わってる🎤",
+          correction: null,
+        },
+      ]);
+    } else {
+      setMessages([{ role: "assistant", text: pickGreeting(scenario), correction: null }]);
+    }
     window.speechSynthesis?.cancel();
   }
 
@@ -603,6 +641,7 @@ export default function KuroEnglish() {
   function startLesson() {
     const phrases = pickLessonPhrases(scenario, 3);
     if (phrases.length === 0) return;
+    setTranslateMode(false);
     setLesson({ phrases, used: phrases.map(() => false) });
     const intro =
       "Lesson time! Today's phrases are:\n" +
@@ -850,6 +889,17 @@ Give exactly 3 short, natural example replies the learner could say next (each 1
             >
               🎯 {lesson ? "レッスン終了" : "レッスン開始"}
             </button>
+            <button
+              onClick={toggleTranslateMode}
+              className="text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap shrink-0 transition"
+              style={{
+                background: translateMode ? COLORS.mint : COLORS.surface,
+                color: translateMode ? "#12121a" : COLORS.mint,
+                border: `1px solid ${COLORS.mint}`,
+              }}
+            >
+              🇯🇵→🇺🇸 {translateMode ? "翻訳モード中" : "翻訳"}
+            </button>
             {SCENARIOS.map((s) => (
               <button
                 key={s.id}
@@ -1048,7 +1098,15 @@ Give exactly 3 short, natural example replies the learner could say next (each 1
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && sendMessage(input)}
-                placeholder={listening ? "Listening…（2.5秒黙ると送信）" : "英語で入力（日本語もOK）"}
+                placeholder={
+                  listening
+                    ? translateMode
+                      ? "日本語で話してね…（2.5秒黙ると送信）"
+                      : "Listening…（2.5秒黙ると送信）"
+                    : translateMode
+                      ? "日本語で入力（英語に翻訳するよ）"
+                      : "英語で入力（日本語もOK）"
+                }
                 className="flex-1 rounded-full px-4 py-2.5 text-sm outline-none"
                 style={{ background: COLORS.surfaceAlt, color: COLORS.text }}
               />
