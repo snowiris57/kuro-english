@@ -222,6 +222,7 @@ function phraseUsedIn(userText, phraseEn) {
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-2.5-flash";
 const API_CALL_COUNT_KEY = "kuro-english-api-call-count";
+const SILENCE_MS = 2500; // 音声入力: 黙ってからこの時間(ms)経過で「喋り終わり」と判定
 
 // 呼び出し回数をlocalStorageに積算する（会話・翻訳・単語検索すべてを含む総量）
 function bumpApiCallCount() {
@@ -304,6 +305,7 @@ export default function KuroEnglish() {
   const [apiCallCount, setApiCallCount] = useState(0);
   const [reviews, setReviews] = useState([]);
   const [lookup, setLookup] = useState(null); // {word, loading, meaning, example}
+  const [hint, setHint] = useState(null); // {loading, items: [{en, ja}]} 返答に困った時のヒント
   const [voices, setVoices] = useState([]);
   const [voiceName, setVoiceName] = useState("");
   const [lesson, setLesson] = useState(null); // {phrases: [{en, ja}], used: [bool]}
@@ -522,6 +524,8 @@ export default function KuroEnglish() {
   useEffect(() => { sendRef.current = sendMessage; }, [sendMessage]);
 
   // ---- speech recognition (auto-send) ----
+  // ブラウザ標準の認識は短い間(ま)で勝手に終了するため、
+  // continuousモード＋独自の無音タイマーで「黙ってからSILENCE_MS経過」まで待つ
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
@@ -530,14 +534,41 @@ export default function KuroEnglish() {
     }
     const rec = new SR();
     rec.lang = "en-US";
-    rec.interimResults = false;
+    rec.continuous = true; // 途中の間で認識を打ち切らない
+    rec.interimResults = true; // 発話中を検知して無音タイマーをリセットする
     rec.maxAlternatives = 1;
-    rec.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      if (transcript && transcript.trim()) sendRef.current(transcript);
+    const finalText = { current: "" };
+    let silenceTimer = null;
+    const resetSilence = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        try { rec.stop(); } catch {}
+      }, SILENCE_MS);
     };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
+    rec.onstart = () => {
+      finalText.current = "";
+      resetSilence();
+    };
+    rec.onresult = (e) => {
+      // Android Chromeは同じ結果を重複して返すことがあるため、毎回全結果から組み立て直す
+      let final = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + " ";
+      }
+      if (final.trim()) finalText.current = final.trim();
+      resetSilence();
+    };
+    rec.onend = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      setListening(false);
+      const text = finalText.current.trim();
+      finalText.current = "";
+      if (text) sendRef.current(text);
+    };
+    rec.onerror = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      setListening(false);
+    };
     recognitionRef.current = rec;
   }, []);
 
@@ -612,6 +643,39 @@ export default function KuroEnglish() {
         ...prev,
         [idx]: { text: "翻訳エラー。もう一回タップしてみて", show: true, loading: false },
       }));
+    }
+  }
+
+  // ---- reply hints (返答に困った時のヒント) ----
+  async function openHint() {
+    if (hint?.loading) return;
+    const msgs = messagesRef.current;
+    const lastKuro = [...msgs].reverse().find((m) => m.role === "assistant");
+    if (!lastKuro) return;
+    setHint({ loading: true, items: [] });
+    try {
+      const recent = msgs.slice(-6).map((m) => `${m.role === "user" ? "Learner" : "Kuro"}: ${m.text}`).join("\n");
+      const raw = await callClaude({
+        messages: [
+          {
+            role: "user",
+            content: `A Japanese English learner is stuck on how to reply in this conversation:
+
+${recent}
+
+Give exactly 3 short, natural example replies the learner could say next (each 12 words or fewer, varied in direction). Respond with ONLY valid JSON, no markdown fences:
+{"hints":[{"en":"...","ja":"日本語訳"},{"en":"...","ja":"..."},{"en":"...","ja":"..."}]}`,
+          },
+        ],
+      });
+      const parsed = parseJson(raw, null);
+      if (parsed?.hints?.length) {
+        setHint({ loading: false, items: parsed.hints });
+      } else {
+        setHint({ loading: false, items: [], error: "うまく取得できなかった…もう一回押してみて" });
+      }
+    } catch (e) {
+      setHint({ loading: false, items: [], error: `通信エラー: ${e?.message || e}` });
     }
   }
 
@@ -870,28 +934,35 @@ export default function KuroEnglish() {
                     }}
                   >
                     {m.role === "assistant" ? renderAssistantText(m.text) : m.text}
-                    {m.role === "assistant" && (
-                      <>
-                        <button
-                          onClick={() => speakNow(m.text, false)}
-                          aria-label="読み上げ"
-                          style={{ marginLeft: 8, verticalAlign: "-2px" }}
-                        >
-                          <Volume2 size={13} color={COLORS.mint} />
-                        </button>
-                        <button
-                          onClick={() => toggleTranslate(i, m.text)}
-                          aria-label="日本語に翻訳"
-                          style={{ marginLeft: 6, verticalAlign: "-2px" }}
-                        >
-                          <Languages
-                            size={13}
-                            color={translations[i]?.show ? COLORS.gold : COLORS.muted}
-                          />
-                        </button>
-                      </>
-                    )}
                   </div>
+                  {m.role === "assistant" && (
+                    <div className="flex gap-2 mt-1.5">
+                      <button
+                        onClick={() => speakNow(m.text, false)}
+                        aria-label="読み上げ"
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium"
+                        style={{
+                          background: COLORS.surfaceAlt,
+                          color: COLORS.mint,
+                          border: `1px solid ${COLORS.border}`,
+                        }}
+                      >
+                        <Volume2 size={16} /> 発音
+                      </button>
+                      <button
+                        onClick={() => toggleTranslate(i, m.text)}
+                        aria-label="日本語に翻訳"
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium"
+                        style={{
+                          background: translations[i]?.show ? COLORS.gold : COLORS.surfaceAlt,
+                          color: translations[i]?.show ? "#12121a" : COLORS.gold,
+                          border: `1px solid ${translations[i]?.show ? COLORS.gold : COLORS.border}`,
+                        }}
+                      >
+                        <Languages size={16} /> 日本語訳
+                      </button>
+                    </div>
+                  )}
                   {m.role === "assistant" && translations[i]?.show && (
                     <div
                       className="mt-1.5 px-3 py-1.5 rounded-xl text-xs leading-relaxed"
@@ -964,11 +1035,20 @@ export default function KuroEnglish() {
                   <Mic size={19} color={listening ? "#12121a" : COLORS.muted} />
                 </button>
               )}
+              <button
+                onClick={openHint}
+                disabled={loading}
+                className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
+                style={{ background: COLORS.surfaceAlt, border: `1px solid ${COLORS.gold}55` }}
+                aria-label="返答のヒントを見る"
+              >
+                <span style={{ fontSize: 20 }}>💡</span>
+              </button>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && sendMessage(input)}
-                placeholder={listening ? "Listening... 喋り終わると自動送信" : "英語で入力（日本語もOK）"}
+                placeholder={listening ? "Listening…（2.5秒黙ると送信）" : "英語で入力（日本語もOK）"}
                 className="flex-1 rounded-full px-4 py-2.5 text-sm outline-none"
                 style={{ background: COLORS.surfaceAlt, color: COLORS.text }}
               />
@@ -1093,6 +1173,76 @@ export default function KuroEnglish() {
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {/* reply hint bottom sheet */}
+      {hint && (
+        <div
+          className="absolute inset-0 flex items-end justify-center"
+          style={{ background: "#00000088", zIndex: 50 }}
+          onClick={() => setHint(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-3xl px-5 pt-4 pb-6"
+            style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold" style={{ color: COLORS.gold }}>
+                💡 こう返してみたら？
+              </span>
+              <button onClick={() => setHint(null)} className="p-1.5" aria-label="閉じる">
+                <X size={18} color={COLORS.muted} />
+              </button>
+            </div>
+            {hint.loading ? (
+              <div className="flex items-center gap-2 text-sm py-3" style={{ color: COLORS.muted }}>
+                <Loader2 size={16} className="animate-spin" /> ヒントを考えてる…
+              </div>
+            ) : hint.error ? (
+              <div className="text-sm py-3" style={{ color: COLORS.muted }}>{hint.error}</div>
+            ) : (
+              <div className="space-y-2.5">
+                {hint.items.map((h, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl px-3.5 py-3"
+                    style={{ background: COLORS.surfaceAlt }}
+                  >
+                    <div className="text-sm leading-relaxed" style={{ color: COLORS.text }}>
+                      {h.en}
+                    </div>
+                    <div className="text-xs mt-1" style={{ color: COLORS.muted }}>
+                      {h.ja}
+                    </div>
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => speakNow(h.en, false)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                        style={{ background: COLORS.surface, color: COLORS.mint, border: `1px solid ${COLORS.border}` }}
+                      >
+                        <Volume2 size={14} /> 発音
+                      </button>
+                      <button
+                        onClick={() => {
+                          setInput(h.en);
+                          setHint(null);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                        style={{ background: COLORS.accentSoft, color: COLORS.accent, border: `1px solid ${COLORS.accent}` }}
+                      >
+                        ✏ これを使う
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="text-[10px] text-center pt-1" style={{ color: COLORS.muted }}>
+                  そのまま送るより、声に出して自分で言ってみるのがおすすめ！
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
