@@ -23,6 +23,11 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      - name: Check secret is present (prints length only, not the value)
+        run: |
+          KEY="${{ secrets.VITE_GEMINI_API_KEY }}"
+          echo "VITE_GEMINI_API_KEY length: ${#KEY}"
+          if [ -z "$KEY" ]; then echo "::warning::Secret is EMPTY or not visible to this job"; fi
       - run: npm run build
         env:
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
