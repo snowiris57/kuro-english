@@ -130,6 +130,20 @@ Rules:
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-2.5-flash";
+const API_CALL_COUNT_KEY = "kuro-english-api-call-count";
+
+// 呼び出し回数をlocalStorageに積算する（会話・翻訳・単語検索すべてを含む総量）
+function bumpApiCallCount() {
+  try {
+    const current = Number(localStorage.getItem(API_CALL_COUNT_KEY) || "0");
+    const next = current + 1;
+    localStorage.setItem(API_CALL_COUNT_KEY, String(next));
+    window.dispatchEvent(new CustomEvent("kuro-api-call-count", { detail: next }));
+    return next;
+  } catch {
+    return null;
+  }
+}
 
 // body: { system?: string, messages: [{role: "user"|"assistant", content: string}], json?: boolean (default true) }
 async function callClaude(body) {
@@ -153,6 +167,7 @@ async function callClaude(body) {
   );
   const data = await response.json();
   const parts = data?.candidates?.[0]?.content?.parts || [];
+  bumpApiCallCount();
   return parts.map((p) => p.text || "").join("\n");
 }
 
@@ -185,6 +200,7 @@ export default function KuroEnglish() {
   const [handsFree, setHandsFree] = useState(false);
   const [micSupported, setMicSupported] = useState(true);
   const [stats, setStats] = useState({ totalTurns: 0 });
+  const [apiCallCount, setApiCallCount] = useState(0);
   const [reviews, setReviews] = useState([]);
   const [lookup, setLookup] = useState(null); // {word, loading, meaning, example}
   const [voices, setVoices] = useState([]);
@@ -218,6 +234,17 @@ export default function KuroEnglish() {
       const raw = localStorage.getItem("kuro-english-reviews");
       if (raw) setReviews(JSON.parse(raw));
     } catch {}
+    try {
+      const raw = localStorage.getItem(API_CALL_COUNT_KEY);
+      if (raw) setApiCallCount(Number(raw));
+    } catch {}
+  }, []);
+
+  // callClaude() が成功するたびに発火するイベントを購読し、表示中の件数を更新する
+  useEffect(() => {
+    const onCount = (e) => setApiCallCount(e.detail);
+    window.addEventListener("kuro-api-call-count", onCount);
+    return () => window.removeEventListener("kuro-api-call-count", onCount);
   }, []);
 
   const saveReview = useCallback((original, corrected) => {
@@ -500,6 +527,15 @@ export default function KuroEnglish() {
             <div className="text-xs" style={{ color: COLORS.muted }}>
               英会話パートナー ・ 発話 {stats.totalTurns}回
             </div>
+            <a
+              href="https://aistudio.google.com/app/apikey"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[10px] underline"
+              style={{ color: COLORS.muted }}
+            >
+              API利用 累計{apiCallCount}回（正確な残り枠はAI Studioで確認）
+            </a>
           </div>
         </div>
         <div className="flex items-center gap-2">
