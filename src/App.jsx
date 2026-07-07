@@ -147,6 +147,9 @@ function bumpApiCallCount() {
 
 // body: { system?: string, messages: [{role: "user"|"assistant", content: string}], json?: boolean (default true) }
 async function callClaude(body) {
+  if (!GEMINI_API_KEY) {
+    throw new Error("APIキー未設定（ビルドにVITE_GEMINI_API_KEYが入っていません）");
+  }
   const { system, messages, json = true } = body;
   const contents = messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
@@ -166,9 +169,16 @@ async function callClaude(body) {
     }
   );
   const data = await response.json();
+  if (data?.error) {
+    throw new Error(`Gemini APIエラー: ${data.error.message || data.error.status || "不明"}`);
+  }
   const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map((p) => p.text || "").join("\n");
+  if (!text.trim()) {
+    throw new Error(`Geminiから空の応答（finishReason: ${data?.candidates?.[0]?.finishReason || "不明"}）`);
+  }
   bumpApiCallCount();
-  return parts.map((p) => p.text || "").join("\n");
+  return text;
 }
 
 function parseJson(raw, fallback) {
@@ -354,10 +364,14 @@ export default function KuroEnglish() {
         if (correction) saveReview(text, correction);
         if (soundOn || handsFreeRef.current) speakNow(reply);
         bumpStats();
-      } catch {
+      } catch (e) {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", text: "Oops, something went wrong on my end — try that once more?", correction: null },
+          {
+            role: "assistant",
+            text: `Oops, something went wrong — try once more?\n⚠ ${e?.message || e}`,
+            correction: null,
+          },
         ]);
       } finally {
         setLoading(false);
