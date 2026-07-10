@@ -475,7 +475,8 @@ export default function KuroEnglish() {
 
   function speakNow(text, allowHandsFreeLoop = true) {
     if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
+    synth.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "en-US";
     utter.rate = 0.98;
@@ -485,7 +486,10 @@ export default function KuroEnglish() {
         if (handsFreeRef.current) setTimeout(() => startMic(), 250);
       };
     }
-    window.speechSynthesis.speak(utter);
+    // Android Chromeはcancel()直後のspeak()を無視することがあるため、
+    // resume()＋少し遅らせてから発話する
+    synth.resume();
+    setTimeout(() => synth.speak(utter), 60);
   }
 
   // ---- send message ----
@@ -509,12 +513,19 @@ export default function KuroEnglish() {
         }
       }
       try {
-        const raw = await callClaude({
-          system: translateModeRef.current
-            ? buildTranslatePrompt()
-            : buildSystemPrompt(scenarioRef.current, lessonRef.current),
-          messages: nextMessages.map((m) => ({ role: m.role, content: m.text })),
-        });
+        // 翻訳モード: 会話履歴を送ると「会話」として返答してしまうため、
+        // 履歴なしの単発翻訳リクエストにする
+        const raw = translateModeRef.current
+          ? await callClaude({
+              system: buildTranslatePrompt(),
+              messages: [
+                { role: "user", content: `Translate this Japanese into natural spoken English:\n\n${text}` },
+              ],
+            })
+          : await callClaude({
+              system: buildSystemPrompt(scenarioRef.current, lessonRef.current),
+              messages: nextMessages.map((m) => ({ role: m.role, content: m.text })),
+            });
         const parsed = parseJson(raw, { reply: raw || "Sorry, say that again?", correction: null });
         const reply = parsed.reply || "...";
         const correction = parsed.correction || null;
@@ -568,12 +579,17 @@ export default function KuroEnglish() {
       resetSilence();
     };
     rec.onresult = (e) => {
-      // Android Chromeは同じ結果を重複して返すことがあるため、毎回全結果から組み立て直す
-      let final = "";
+      // Android Chromeはcontinuousモードで同じ結果を累積・重複して返すバグがあるため、
+      // 毎回全結果から組み立て直し、さらに同一テキストは1回だけ採用する
+      const seen = [];
       for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript + " ";
+        if (e.results[i].isFinal) {
+          const t = e.results[i][0].transcript.trim();
+          if (t && !seen.includes(t)) seen.push(t);
+        }
       }
-      if (final.trim()) finalText.current = final.trim();
+      const final = seen.join(" ").trim();
+      if (final) finalText.current = final;
       resetSilence();
     };
     rec.onend = () => {
