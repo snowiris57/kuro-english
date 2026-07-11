@@ -106,10 +106,11 @@
 
   <label class="drop" id="drop">
     <div class="icon">🖼️</div>
-    <div class="big">ここに画像をドラッグ＆ドロップ<br>またはタップして選択</div>
-    <div class="small">JPG / PNG / BMP ・ 複数まとめてOK</div>
+    <div class="big">ここに画像やフォルダをドラッグ＆ドロップ<br>またはタップして選択</div>
+    <div class="small">JPG / PNG / BMP ・ 複数まとめてOK ・ フォルダごとでもOK</div>
     <input type="file" id="file" accept=".jpg,.jpeg,.png,.bmp,image/jpeg,image/png,image/bmp" multiple>
   </label>
+  <input type="file" id="folder" webkitdirectory multiple>
 
   <div class="opts">
     <label>上限サイズ:
@@ -120,6 +121,8 @@
         <option value="3">3MB</option>
       </select>
     </label>
+    <button class="btn ghost" id="pickFolder">📁 フォルダごと選択</button>
+    <span id="note"></span>
   </div>
 
   <div class="list" id="list"></div>
@@ -140,7 +143,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const drop = $("drop"), fileInput = $("file"), list = $("list");
+const drop = $("drop"), fileInput = $("file"), folderInput = $("folder"), list = $("list");
 const toolbar = $("toolbar"), limitSel = $("limit");
 
 const results = []; // { name, blob } for the ZIP
@@ -150,22 +153,85 @@ const results = []; // { name, blob } for the ZIP
   drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) =>
   drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", (e) => handleFiles(e.dataTransfer.files));
+drop.addEventListener("drop", async (e) => {
+  // フォルダが混ざっている場合は webkitGetAsEntry で中身を再帰的に集める
+  const entries = [...(e.dataTransfer.items || [])]
+    .map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry())
+    .filter(Boolean);
+  if (entries.some((en) => en.isDirectory)) {
+    const found = [];
+    for (const en of entries) await walkEntry(en, found);
+    addFiles(found);
+  } else {
+    handleFiles(e.dataTransfer.files);
+  }
+});
 fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileInput.value = ""; });
+$("pickFolder").addEventListener("click", () => folderInput.click());
+folderInput.addEventListener("change", () => { handleFiles(folderInput.files); folderInput.value = ""; });
 $("clear").addEventListener("click", () => {
-  list.innerHTML = ""; results.length = 0; toolbar.hidden = true;
+  list.innerHTML = ""; results.length = 0; toolbar.hidden = true; $("note").textContent = "";
 });
 
 function fmtMB(bytes) {
   return (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2) + "MB";
 }
 
+// ディレクトリツリーを再帰的にたどってファイルを集める
+function walkEntry(entry, out, path = "") {
+  return new Promise((resolve) => {
+    if (entry.isFile) {
+      entry.file((f) => { out.push({ file: f, rel: path + f.name }); resolve(); }, () => resolve());
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const readBatch = () => reader.readEntries(async (ents) => {
+        if (!ents.length) return resolve(); // readEntriesは100件ずつ返すので空になるまで回す
+        for (const en of ents) await walkEntry(en, out, path + entry.name + "/");
+        readBatch();
+      }, () => resolve());
+      readBatch();
+    } else {
+      resolve();
+    }
+  });
+}
+
+const IMG_RE = /\.(jpe?g|png|bmp)$/i;
+const IMG_MIME = /^image\/(jpeg|png|bmp)$/;
+
 function handleFiles(files) {
-  for (const f of files) processFile(f);
+  addFiles([...files].map((f) => ({ file: f, rel: f.webkitRelativePath || f.name })));
+}
+
+function addFiles(items) {
+  let skipped = 0;
+  for (const { file, rel } of items) {
+    if (!IMG_RE.test(file.name) && !IMG_MIME.test(file.type)) { skipped++; continue; }
+    enqueue(file, rel);
+  }
+  $("note").textContent = skipped ? `（画像以外の ${skipped} 件はスキップ）` : "";
+}
+
+// ---------- 同時処理数を制限するキュー（大量画像でのメモリ不足対策） ----------
+const queue = [];
+let running = 0;
+const MAX_PARALLEL = 2;
+
+function enqueue(file, relPath) {
+  queue.push({ file, relPath });
+  pump();
+}
+
+function pump() {
+  while (running < MAX_PARALLEL && queue.length) {
+    const { file, relPath } = queue.shift();
+    running++;
+    processFile(file, relPath).finally(() => { running--; pump(); });
+  }
 }
 
 // ---------- per-file pipeline ----------
-async function processFile(file) {
+async function processFile(file, relPath) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
@@ -175,7 +241,8 @@ async function processFile(file) {
       <div class="sizes"></div>
       <div class="status busy"><span class="spinner"></span>処理中…</div>
     </div>`;
-  card.querySelector(".fname").textContent = file.name;
+  const shownName = relPath || file.name;
+  card.querySelector(".fname").textContent = shownName;
   card.querySelector(".sizes").textContent = fmtMB(file.size);
   list.appendChild(card);
   const statusEl = card.querySelector(".status");
@@ -209,7 +276,9 @@ async function processFile(file) {
 
     const base = file.name.replace(/\.[^.]+$/, "");
     const outName = base + "_resize." + (keepPng ? "png" : "jpg");
-    results.push({ name: outName, blob });
+    // ZIP内ではフォルダ構成を保つ（例: 旅行/写真1_resize.jpg）
+    const dir = shownName.includes("/") ? shownName.slice(0, shownName.lastIndexOf("/") + 1) : "";
+    results.push({ name: dir + outName, blob });
     toolbar.hidden = false;
 
     const url = URL.createObjectURL(blob);
