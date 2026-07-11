@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画像リサイズくん — 20MB以下に自動圧縮</title>
+<style>
+  :root {
+    --bg: #12121a;
+    --panel: #1c1c28;
+    --panel2: #242432;
+    --text: #e8e8f0;
+    --sub: #9a9ab0;
+    --accent: #4ade80;
+    --accent-dim: #22c55e;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --line: #34343f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", sans-serif;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  .lead { color: var(--sub); font-size: 13px; margin-bottom: 16px; line-height: 1.6; }
+  .drop {
+    border: 2px dashed var(--line);
+    border-radius: 16px;
+    background: var(--panel);
+    padding: 36px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--accent); background: var(--panel2); }
+  .drop .big { font-size: 15px; margin-bottom: 6px; }
+  .drop .small { color: var(--sub); font-size: 12px; }
+  .drop .icon { font-size: 34px; margin-bottom: 8px; }
+  input[type=file] { display: none; }
+  .opts {
+    display: flex; align-items: center; gap: 10px;
+    margin: 14px 0; font-size: 13px; color: var(--sub);
+    flex-wrap: wrap;
+  }
+  select {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; font-size: 13px;
+  }
+  .list { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .thumb {
+    width: 56px; height: 56px; border-radius: 8px; flex-shrink: 0;
+    background: var(--panel2); object-fit: cover;
+  }
+  .info { flex: 1; min-width: 0; }
+  .fname {
+    font-size: 13px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; margin-bottom: 3px;
+  }
+  .sizes { font-size: 12px; color: var(--sub); }
+  .sizes .after { color: var(--accent); font-weight: bold; }
+  .status { font-size: 11px; margin-top: 3px; }
+  .status.ok { color: var(--accent); }
+  .status.skip { color: var(--warn); }
+  .status.err { color: var(--err); }
+  .status.busy { color: var(--sub); }
+  .btn {
+    background: var(--accent-dim); color: #06220f; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 13px;
+    font-weight: bold; cursor: pointer; flex-shrink: 0;
+    text-decoration: none; display: inline-block;
+  }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.ghost {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line);
+  }
+  .toolbar { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .8s linear infinite;
+    vertical-align: -2px; margin-right: 5px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { color: var(--sub); font-size: 11px; margin-top: 28px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📦 画像リサイズくん</h1>
+  <p class="lead">
+    JPG・PNG・BMP を選ぶだけで、LINEの上限（20MB）以下に自動で圧縮します。<br>
+    画像はどこにも送信されません。すべてこの端末の中だけで処理されます。
+  </p>
+
+  <label class="drop" id="drop">
+    <div class="icon">🖼️</div>
+    <div class="big">ここに画像をドラッグ＆ドロップ<br>またはタップして選択</div>
+    <div class="small">JPG / PNG / BMP ・ 複数まとめてOK</div>
+    <input type="file" id="file" accept=".jpg,.jpeg,.png,.bmp,image/jpeg,image/png,image/bmp" multiple>
+  </label>
+
+  <div class="opts">
+    <label>上限サイズ:
+      <select id="limit">
+        <option value="20" selected>20MB（LINEの写真上限）</option>
+        <option value="10">10MB</option>
+        <option value="5">5MB</option>
+        <option value="3">3MB</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <div class="toolbar" id="toolbar" hidden>
+    <button class="btn" id="dlAll">✅ まとめてダウンロード（ZIP）</button>
+    <button class="btn ghost" id="clear">リストを消す</button>
+  </div>
+
+  <footer>
+    ・20MB以下のJPG/PNGはそのままLINEで送れるため「圧縮不要」と表示します（BMPはLINEでファイル扱いになるためJPGに変換します）。<br>
+    ・透過（背景が透明）のPNGは透過を保ったままPNGで縮小し、それ以外はJPGに変換して圧縮します。<br>
+    ・仕上がりは上限の約95%を目標にするので、確実に上限未満になります。
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file"), list = $("list");
+const toolbar = $("toolbar"), limitSel = $("limit");
+
+const results = []; // { name, blob } for the ZIP
+
+// ---------- UI: drag & drop ----------
+["dragenter", "dragover"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => handleFiles(e.dataTransfer.files));
+fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileInput.value = ""; });
+$("clear").addEventListener("click", () => {
+  list.innerHTML = ""; results.length = 0; toolbar.hidden = true;
+});
+
+function fmtMB(bytes) {
+  return (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2) + "MB";
+}
+
+function handleFiles(files) {
+  for (const f of files) processFile(f);
+}
+
+// ---------- per-file pipeline ----------
+async function processFile(file) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <img class="thumb" alt="">
+    <div class="info">
+      <div class="fname"></div>
+      <div class="sizes"></div>
+      <div class="status busy"><span class="spinner"></span>処理中…</div>
+    </div>`;
+  card.querySelector(".fname").textContent = file.name;
+  card.querySelector(".sizes").textContent = fmtMB(file.size);
+  list.appendChild(card);
+  const statusEl = card.querySelector(".status");
+  const thumbEl = card.querySelector(".thumb");
+
+  const limitBytes = Number(limitSel.value) * 1024 * 1024;
+  const target = Math.floor(limitBytes * 0.95);
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const isBmp = ext === "bmp" || file.type === "image/bmp";
+
+  try {
+    // Already small enough and LINE-friendly? Nothing to do.
+    if (!isBmp && file.size <= limitBytes) {
+      thumbEl.src = URL.createObjectURL(file);
+      statusEl.className = "status skip";
+      statusEl.textContent = `⚡ ${fmtMB(file.size)} — もう${limitSel.value}MB以下なので、このままLINEで送れます`;
+      return;
+    }
+
+    const bitmap = await decodeImage(file);
+    thumbEl.src = URL.createObjectURL(file);
+
+    const keepPng = (ext === "png" || file.type === "image/png") && await hasTransparency(bitmap);
+    const mime = keepPng ? "image/png" : "image/jpeg";
+    const blob = await compressToTarget(bitmap, mime, target);
+    bitmap.close?.();
+
+    if (!blob || blob.size > limitBytes) {
+      throw new Error("目標サイズまで圧縮できませんでした");
+    }
+
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const outName = base + "_resize." + (keepPng ? "png" : "jpg");
+    results.push({ name: outName, blob });
+    toolbar.hidden = false;
+
+    const url = URL.createObjectURL(blob);
+    const pct = Math.round((1 - blob.size / file.size) * 100);
+    card.querySelector(".sizes").innerHTML =
+      `${fmtMB(file.size)} → <span class="after">${fmtMB(blob.size)}</span>（${pct}%削減）`;
+    statusEl.className = "status ok";
+    statusEl.textContent = "✅ 完了 — ダウンロードしてLINEで送れます";
+
+    const a = document.createElement("a");
+    a.className = "btn";
+    a.href = url;
+    a.download = outName;
+    a.textContent = "保存";
+    card.appendChild(a);
+  } catch (err) {
+    console.error(err);
+    statusEl.className = "status err";
+    statusEl.textContent = "❌ " + (err.message || "この画像は処理できませんでした");
+  }
+}
+
+// ---------- decoding (EXIF orientation対応 + フォールバック) ----------
+async function decodeImage(file) {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (_) { /* fall through */ }
+  try {
+    return await createImageBitmap(file);
+  } catch (_) { /* fall through */ }
+  return await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像を読み込めませんでした（対応していない形式かもしれません）")); };
+    img.src = url;
+  });
+}
+
+const imgW = (b) => b.width || b.naturalWidth;
+const imgH = (b) => b.height || b.naturalHeight;
+
+// 縮小サムネイルでアルファをチェック（フル解像度の走査は重いので避ける）
+async function hasTransparency(bitmap) {
+  const w = imgW(bitmap), h = imgH(bitmap);
+  const s = Math.min(1, 256 / Math.max(w, h));
+  const cw = Math.max(1, Math.round(w * s)), ch = Math.max(1, Math.round(h * s));
+  const c = document.createElement("canvas");
+  c.width = cw; c.height = ch;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, cw, ch);
+  const data = ctx.getImageData(0, 0, cw, ch).data;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] < 250) return true;
+  }
+  return false;
+}
+
+// ---------- encoding ----------
+function encodeAt(bitmap, scale, mime, quality) {
+  let w = Math.max(1, Math.round(imgW(bitmap) * scale));
+  let h = Math.max(1, Math.round(imgH(bitmap) * scale));
+
+  // 段階的に半分ずつ縮小してから最終サイズへ（一気に縮めるとギザギザになるため）
+  let src = bitmap;
+  let sw = imgW(bitmap), sh = imgH(bitmap);
+  while (sw / 2 >= w && sh / 2 >= h) {
+    const c = document.createElement("canvas");
+    c.width = Math.round(sw / 2); c.height = Math.round(sh / 2);
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    src = c; sw = c.width; sh = c.height;
+  }
+
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d");
+  if (mime === "image/jpeg") { // JPGに透過はないので白背景を敷く
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+  }
+  ctx.drawImage(src, 0, 0, w, h);
+  return new Promise((resolve, reject) =>
+    c.toBlob((b) => b ? resolve(b) : reject(new Error("画像の書き出しに失敗しました")), mime, quality));
+}
+
+async function compressToTarget(bitmap, mime, target) {
+  const MAX_SIDE = 8192; // 巨大画像はキャンバス上限対策で先に縮める
+  let scale = Math.min(1, MAX_SIDE / Math.max(imgW(bitmap), imgH(bitmap)));
+  let quality = 0.85;
+
+  let blob = await encodeAt(bitmap, scale, mime, quality);
+  for (let i = 0; i < 12 && blob.size > target; i++) {
+    const ratio = Math.sqrt(target / blob.size);
+    if (mime === "image/jpeg" && quality > 0.6) {
+      quality = Math.max(0.6, quality * ratio); // まず画質を下げる（見た目の劣化が少ない）
+    } else {
+      scale = Math.max(0.01, scale * ratio * 0.95); // それでも大きければ解像度を下げる
+    }
+    blob = await encodeAt(bitmap, scale, mime, quality);
+  }
+  return blob.size <= target ? blob : null;
+}
+
+// ---------- ZIP (無圧縮STORE形式・依存ライブラリなし) ----------
+const crcTable = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+async function buildZip(entries) {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  for (const { name, blob } of entries) {
+    const data = new Uint8Array(await blob.arrayBuffer());
+    const nameBytes = enc.encode(name);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);        // version needed
+    local.setUint16(6, 0x0800, true);    // UTF-8 filename flag
+    local.setUint16(8, 0, true);         // method: store
+    local.setUint32(14, crc, true);
+    local.setUint32(18, data.length, true);
+    local.setUint32(22, data.length, true);
+    local.setUint16(26, nameBytes.length, true);
+    chunks.push(local.buffer, nameBytes, data);
+
+    const cen = new DataView(new ArrayBuffer(46));
+    cen.setUint32(0, 0x02014b50, true);
+    cen.setUint16(4, 20, true);
+    cen.setUint16(6, 20, true);
+    cen.setUint16(8, 0x0800, true);
+    cen.setUint16(10, 0, true);
+    cen.setUint32(16, crc, true);
+    cen.setUint32(20, data.length, true);
+    cen.setUint32(24, data.length, true);
+    cen.setUint16(28, nameBytes.length, true);
+    cen.setUint32(42, offset, true);
+    central.push(cen.buffer, nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const centralSize = central.reduce((s, b) => s + (b.byteLength ?? b.length), 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, entries.length, true);
+  end.setUint16(10, entries.length, true);
+  end.setUint32(12, centralSize, true);
+  end.setUint32(16, offset, true);
+  return new Blob([...chunks, ...central, end.buffer], { type: "application/zip" });
+}
+
+$("dlAll").addEventListener("click", async () => {
+  if (!results.length) return;
+  if (results.length === 1) { // 1枚ならZIPにせずそのまま保存
+    triggerDownload(URL.createObjectURL(results[0].blob), results[0].name);
+    return;
+  }
+  const zip = await buildZip(results);
+  triggerDownload(URL.createObjectURL(zip), "resize_images.zip");
+});
+
+function triggerDownload(url, name) {
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+</script>
+</body>
+</html>
